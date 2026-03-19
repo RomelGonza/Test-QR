@@ -7,31 +7,60 @@ define('DB_NAME', getenv('DB_NAME') ?: 'ubvwmzhw_onta');
 
 // App Root
 define('APPROOT', dirname(dirname(__FILE__)) . '/app');
-// URL Root — read from environment or detect dynamically from request
-if (getenv('APP_ENV') === 'production') {
-    if (!empty(getenv('APP_URL'))) {
-        // Use explicit APP_URL if set
-        $urlroot = getenv('APP_URL');
-    } else {
-        // Detect from request — handles Railway's HTTPS reverse proxy.
-        // Railway strips and overwrites X-Forwarded-Proto from clients,
-        // so it is safe to trust here. Scheme is validated to http/https only.
-        $forwarded_proto = $_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '';
-        if ($forwarded_proto === 'https') {
-            $scheme = 'https';
-        } elseif (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') {
-            $scheme = 'https';
-        } else {
-            $scheme = 'http';
-        }
-        $host = $_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? 'localhost';
-        $urlroot = $scheme . '://' . $host . '/';
-    }
+// URL Root — prefer APP_URL, otherwise auto-detect host/scheme so assets resolve even if APP_ENV is unset
+$appUrlEnv = getenv('APP_URL');
+$appEnv = getenv('APP_ENV') ?: '';
+// Fallback defaults to /onta/ for legacy dev setups. Override via APP_FALLBACK_PATH when needed.
+$rawFallback = getenv('APP_FALLBACK_PATH');
+if (!empty($rawFallback) && preg_match('/^[\\/a-zA-Z0-9_-]+$/', $rawFallback)) {
+    $fallbackPath = $rawFallback;
 } else {
-    // En development, usar /onta/ como ruta por defecto
-    $urlroot = getenv('APP_URL') ?: 'http://localhost/onta/';
+    $fallbackPath = '/onta/';
 }
-// Asegurar que siempre termina con /
+$forwardedProto = $_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '';
+$httpsFlag = $_SERVER['HTTPS'] ?? '';
+$forceHttps = filter_var(getenv('APP_FORCE_HTTPS'), FILTER_VALIDATE_BOOLEAN);
+
+// Trust HTTPS only when the proxy explicitly declares it or the server marks HTTPS.
+$isDirectHttps = !empty($httpsFlag) && $httpsFlag !== 'off';
+$isTrustedProxy = $appEnv === 'production' && $forwardedProto === 'https';
+if ($isDirectHttps || $isTrustedProxy || $forceHttps) {
+    $scheme = 'https';
+} else {
+    $scheme = 'http';
+}
+
+// Validate the host to prevent header injection (HTTP_HOST/SERVER_NAME are client-controlled)
+$rawHost = $_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? '';
+$host = '';
+if (!empty($rawHost)) {
+    $hostParts = explode(':', $rawHost, 2);
+    $domain = $hostParts[0];
+    $port = $hostParts[1] ?? '';
+
+    if (filter_var($domain, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME)) {
+        $host = $domain;
+        if ($port !== '' && ctype_digit($port)) {
+            $portNum = (int) $port;
+            if ($portNum >= 1 && $portNum <= 65535) {
+                $host .= ':' . $portNum;
+            }
+        }
+    }
+}
+
+if (!empty($appUrlEnv)) {
+    // Use explicit APP_URL if provided
+    $urlroot = $appUrlEnv;
+} elseif (!empty($host)) {
+    // Derive from current request host (works for Railway/NGINX/Apache)
+    $urlroot = $scheme . '://' . $host . '/';
+} else {
+    // CLI or environments without HTTP context fall back to local dev path
+    $normalizedFallback = '/' . trim($fallbackPath, '/') . '/';
+    $urlroot = $scheme . '://localhost' . $normalizedFallback;
+}
+// Ensure URLROOT always ends with /
 define('URLROOT', rtrim($urlroot, '/') . '/');
 // Site Name
 define('SITENAME', getenv('SITENAME') ?: 'ONTA PERU 2026');
